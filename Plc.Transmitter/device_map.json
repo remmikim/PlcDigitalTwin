@@ -1,6 +1,6 @@
 ﻿{
   "1": {
-    "description": "1호기 - 메인 라인",
+    "description": "1호기 - 의성 1호기",
     "devices": [
       {
         "deviceAddress": "X0",
@@ -21,7 +21,7 @@
     ]
   },
   "2": {
-    "description": "2호기 - 조립 라인",
+    "description": "2호기 - 의성 2호기",
     "devices": [
       {
         "deviceAddress": "X0",
@@ -42,7 +42,7 @@
     ]
   },
   "3": {
-    "description": "3호기 - 테스트 스테이션",
+    "description": "3호기 - 의성 2호기",
     "devices": [
       {
         "deviceAddress": "X0",

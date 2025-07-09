@@ -1,6 +1,7 @@
 ﻿using Hermes.Services;
 using Hermes.ViewModels;
 using Hermes.Views;
+using System;
 using System.Windows;
 
 namespace Hermes
@@ -11,16 +12,18 @@ namespace Hermes
     public partial class App : Application
     {
         private PlcManagerService? _plcManager;
+        private IMqttClientService? _mqttService;
 
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
 
-            // 1. PLC 매니저 서비스 인스턴스 생성
+            // 1. 서비스 인스턴스 생성
             _plcManager = new PlcManagerService();
+            _mqttService = new MqttClientService();
 
-            // 2. 메인 ViewModel 생성 및 매니저 서비스 주입
-            var mainViewModel = new MainViewModel(_plcManager);
+            // 2. 메인 ViewModel 생성 및 서비스 주입
+            var mainViewModel = new MainViewModel(_plcManager, _mqttService);
 
             // 3. 메인 윈도우 생성 및 DataContext 할당
             var mainWindow = new MainWindow
@@ -34,8 +37,9 @@ namespace Hermes
 
         protected override void OnExit(ExitEventArgs e)
         {
-            // 애플리케이션 종료 시 매니저 서비스를 통해 모든 리소스 정리
+            // 애플리케이션 종료 시 모든 서비스 리소스 정리
             _plcManager?.Dispose();
+            (_mqttService as IDisposable)?.Dispose();
             base.OnExit(e);
         }
     }
