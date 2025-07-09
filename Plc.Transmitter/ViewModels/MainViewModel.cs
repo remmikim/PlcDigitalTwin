@@ -1,10 +1,12 @@
 ﻿using Hermes.Helpers;
 using Hermes.Models;
 using Hermes.Services;
+using Newtonsoft.Json;
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
-using System.Linq;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -15,7 +17,8 @@ namespace Hermes.ViewModels
     public class MainViewModel : ObservableObject
     {
         private readonly IPlcCommunicationService _plcService;
-        private Timer? _simulationTimer;
+
+        private CancellationTokenSource? _pollingCts;
 
         #region Properties
 
@@ -27,11 +30,11 @@ namespace Hermes.ViewModels
             {
                 _isPlcConnected = value;
                 OnPropertyChanged();
-                // UI 스레드에서 커맨드 상태 갱신
                 Application.Current.Dispatcher.Invoke(() =>
                 {
                     ((RelayCommand)ConnectPlcCommand).RaiseCanExecuteChanged();
                     ((RelayCommand)DisconnectPlcCommand).RaiseCanExecuteChanged();
+                    ((RelayCommand)WritePlcValueCommand).RaiseCanExecuteChanged();
                 });
             }
         }
@@ -50,11 +53,9 @@ namespace Hermes.ViewModels
         public AppConfig Config { get; } = new AppConfig();
         public ObservableCollection<LogEntry> Logs { get; } = new ObservableCollection<LogEntry>();
 
-        // PLC 데이터 모니터링을 위한 컬렉션
         public ObservableCollection<PlcDataItem> PlcDataItems { get; } = new ObservableCollection<PlcDataItem>();
 
-        // PLC에 값을 쓰기 위한 속성
-        private string _writeAddress = "D2000";
+        private string _writeAddress = "D０";
         public string WriteAddress
         {
             get => _writeAddress;
@@ -85,19 +86,41 @@ namespace Hermes.ViewModels
             DisconnectPlcCommand = new RelayCommand(async _ => await ExecuteDisconnectPlcAsync(), _ => IsPlcConnected);
             WritePlcValueCommand = new RelayCommand(async _ => await ExecuteWritePlcValueAsync(), _ => IsPlcConnected);
 
-            InitializePlcDataItems();
+            LoadDeviceMap();
             AddLog("Info", "애플리케이션이 시작되었습니다.");
         }
 
         /// <summary>
-        /// 모니터링할 PLC 디바이스 목록을 초기화합니다.
+        /// [수정] device_map.json 파일에서 모니터링할 디바이스 목록을 로드합니다.
         /// </summary>
-        private void InitializePlcDataItems()
+        private void LoadDeviceMap()
         {
-            PlcDataItems.Add(new PlcDataItem { DeviceAddress = "D1000", Description = "컨베이어 속도" });
-            PlcDataItems.Add(new PlcDataItem { DeviceAddress = "D1001", Description = "교반기 온도" });
-            PlcDataItems.Add(new PlcDataItem { DeviceAddress = "M100", Description = "자동/수동 모드" });
-            PlcDataItems.Add(new PlcDataItem { DeviceAddress = "Y0", Description = "메인 램프" });
+            try
+            {
+                string filePath = "device_map.json";
+                if (File.Exists(filePath))
+                {
+                    string json = File.ReadAllText(filePath);
+                    var items = JsonConvert.DeserializeObject<List<PlcDataItem>>(json);
+                    PlcDataItems.Clear();
+                    if (items != null)
+                    {
+                        foreach (var item in items)
+                        {
+                            PlcDataItems.Add(item);
+                        }
+                    }
+                    AddLog("Info", $"{PlcDataItems.Count}개의 디바이스를 설정 파일에서 로드했습니다.");
+                }
+                else
+                {
+                    AddLog("Warning", "device_map.json 설정 파일을 찾을 수 없습니다.");
+                }
+            }
+            catch (Exception ex)
+            {
+                AddLog("Error", $"디바이스 설정 파일 로드 실패: {ex.Message}");
+            }
         }
 
         private async Task ExecuteConnectPlcAsync()
@@ -111,7 +134,7 @@ namespace Hermes.ViewModels
                 if (success)
                 {
                     AddLog("Success", "PLC에 성공적으로 연결되었습니다.");
-                    StartSimulation();
+                    StartPolling();
                 }
                 else
                 {
@@ -131,7 +154,7 @@ namespace Hermes.ViewModels
             AddLog("Info", "PLC 연결 해제 시도...");
             try
             {
-                StopSimulation();
+                StopPolling();
                 await _plcService.DisconnectAsync();
                 IsPlcConnected = false;
                 AddLog("Info", "PLC 연결이 해제되었습니다.");
@@ -161,56 +184,69 @@ namespace Hermes.ViewModels
                 }
                 else
                 {
-                    AddLog("Error", "PLC 쓰기에 실패했습니다.");
+                    // 이 경우는 거의 발생하지 않음. 보통 예외가 발생함.
+                    AddLog("Error", "PLC 쓰기에 실패했습니다. 반환값이 false입니다.");
                 }
             }
             catch (Exception ex)
             {
-                AddLog("Error", $"PLC 쓰기 중 예외 발생: {ex.Message}");
+                // [수정] 더 상세한 오류 로깅
+                AddLog("Error", $"PLC 쓰기 중 예외 발생: {ex.Message}. PLC 설정을 확인하세요.");
+                Debug.WriteLine($"[WRITE ERROR] {ex}");
             }
         }
 
-        private void StartSimulation()
+        private void StartPolling()
         {
+            _pollingCts?.Cancel();
+            _pollingCts = new CancellationTokenSource();
+
+            Task.Run(() => PollingLoopAsync(_pollingCts.Token), _pollingCts.Token);
             AddLog("Info", "PLC 데이터 폴링을 시작합니다.");
-            // 1초마다 UpdatePlcDataAsync 메서드를 실행하는 타이머 생성
-            _simulationTimer = new Timer(UpdatePlcDataAsync, null, 0, 1000);
         }
 
-        private void StopSimulation()
+        private void StopPolling()
         {
+            _pollingCts?.Cancel();
+            _pollingCts = null;
             AddLog("Info", "PLC 데이터 폴링을 중지합니다.");
-            _simulationTimer?.Change(Timeout.Infinite, 0);
-            _simulationTimer?.Dispose();
-            _simulationTimer = null;
         }
 
-        /// <summary>
-        /// 타이머에 의해 주기적으로 호출되어 PLC 데이터를 읽고 UI를 업데이트합니다.
-        /// </summary>
-        private async void UpdatePlcDataAsync(object? state)
+        private async Task PollingLoopAsync(CancellationToken token)
         {
-            if (!IsPlcConnected) return;
-
-            try
+            while (!token.IsCancellationRequested)
             {
-                // 각 모니터링 항목의 값을 PLC에서 읽어와 업데이트
-                foreach (var item in PlcDataItems)
+                try
                 {
-                    var data = await _plcService.ReadDeviceBlockAsync(item.DeviceAddress, 1);
-                    // UI 스레드에서 속성 값 변경
-                    Application.Current.Dispatcher.Invoke(() =>
+                    foreach (var item in PlcDataItems)
                     {
-                        item.CurrentValue = data[0];
-                    });
+                        if (token.IsCancellationRequested) break;
+
+                        try
+                        {
+                            var data = await _plcService.ReadDeviceBlockAsync(item.DeviceAddress, 1);
+                            Application.Current.Dispatcher.Invoke(() => item.CurrentValue = data[0]);
+                        }
+                        catch (Exception ex)
+                        {
+                            AddLog("Error", $"'{item.DeviceAddress}' 읽기 실패: {ex.Message}");
+                        }
+                    }
+
+                    await Task.Delay(1000, token);
+                }
+                catch (TaskCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    AddLog("Critical", $"폴링 루프에서 심각한 오류 발생: {ex.Message}");
+                    await ExecuteDisconnectPlcAsync();
+                    break;
                 }
             }
-            catch (Exception ex)
-            {
-                // 통신 중 오류 발생 시 시뮬레이션 중지 및 연결 해제
-                AddLog("Critical", $"데이터 읽기 실패: {ex.Message}. 폴링을 중지합니다.");
-                await ExecuteDisconnectPlcAsync();
-            }
+            Debug.WriteLine("PollingLoopAsync finished.");
         }
 
         private void AddLog(string level, string message)
