@@ -2,7 +2,6 @@
 using MQTTnet.Client;
 using System;
 using System.Diagnostics;
-using System.Text;
 using System.Threading.Tasks;
 
 namespace Hermes.Services
@@ -11,6 +10,8 @@ namespace Hermes.Services
     {
         private readonly IMqttClient _mqttClient;
         public bool IsConnected => _mqttClient.IsConnected;
+
+        public Action<MqttApplicationMessageReceivedEventArgs>? MessageReceivedHandler { get; set; }
 
         public MqttClientService()
         {
@@ -28,6 +29,13 @@ namespace Hermes.Services
                 Debug.WriteLine("### MQTT: DISCONNECTED FROM SERVER ###");
                 return Task.CompletedTask;
             };
+
+            // [추가] 메시지 수신 이벤트 핸들러
+            _mqttClient.ApplicationMessageReceivedAsync += e =>
+            {
+                MessageReceivedHandler?.Invoke(e);
+                return Task.CompletedTask;
+            };
         }
 
         public async Task<bool> ConnectAsync(string address, int port, string lwtTopic)
@@ -38,7 +46,6 @@ namespace Hermes.Services
                 .WithTcpServer(address, port)
                 .WithClientId($"hermes-transmitter-{Guid.NewGuid()}")
                 .WithCleanSession()
-                // [수정] 제안해주신 대로 WithWillMessage 대신 개별 속성으로 LWT를 설정합니다.
                 .WithWillTopic(lwtTopic)
                 .WithWillPayload(lwtPayload)
                 .WithWillRetain(true)
@@ -66,20 +73,27 @@ namespace Hermes.Services
 
         public async Task PublishAsync(string topic, string payload, bool retain = false)
         {
-            if (!_mqttClient.IsConnected)
-            {
-                // 연결되어 있지 않으면 발행하지 않음
-                return;
-            }
+            if (!_mqttClient.IsConnected) return;
 
             var message = new MqttApplicationMessageBuilder()
                 .WithTopic(topic)
                 .WithPayload(payload)
-                .WithQualityOfServiceLevel(MQTTnet.Protocol.MqttQualityOfServiceLevel.AtLeastOnce) // QoS 1
+                .WithQualityOfServiceLevel(MQTTnet.Protocol.MqttQualityOfServiceLevel.AtLeastOnce)
                 .WithRetainFlag(retain)
                 .Build();
 
             await _mqttClient.PublishAsync(message, CancellationToken.None);
+        }
+
+        /// <summary>
+        /// [추가] 토픽 구독 메서드
+        /// </summary>
+        public async Task SubscribeAsync(string topic)
+        {
+            if (!_mqttClient.IsConnected) return;
+
+            await _mqttClient.SubscribeAsync(new MqttTopicFilterBuilder().WithTopic(topic).Build());
+            Debug.WriteLine($"### MQTT: SUBSCRIBED TO TOPIC: {topic} ###");
         }
 
         public void Dispose()

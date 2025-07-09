@@ -1,12 +1,15 @@
 ﻿using Hermes.Helpers;
 using Hermes.Models;
 using Hermes.Services;
+using MQTTnet.Client;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -92,6 +95,9 @@ namespace Hermes.ViewModels
         {
             _plcManager = plcManager ?? throw new ArgumentNullException(nameof(plcManager));
             _mqttService = mqttService ?? throw new ArgumentNullException(nameof(mqttService));
+
+            // [추가] MQTT 메시지 수신 핸들러 지정
+            _mqttService.MessageReceivedHandler = OnMqttMessageReceived;
 
             ConnectPlcCommand = new RelayCommand(async _ => await ExecuteConnectPlcAsync(), _ => SelectedPlc != null && !SelectedPlc.IsConnected);
             DisconnectPlcCommand = new RelayCommand(async _ => await ExecuteDisconnectPlcAsync(), _ => SelectedPlc != null && SelectedPlc.IsConnected);
@@ -225,8 +231,6 @@ namespace Hermes.ViewModels
             AddLog("Info", $"MQTT 브로커 연결 시도: {Config.MqttBrokerAddress}:{Config.MqttBrokerPort}");
             try
             {
-                // LWT 토픽: 이 Transmitter의 모든 PLC 연결 상태를 대표하는 토픽
-                // 실제 환경에서는 site/area/line 등을 설정 파일에서 읽어와야 함
                 string lwtTopic = $"status/factory-01/assembly/line-a/transmitter-01/connection";
                 bool success = await _mqttService.ConnectAsync(Config.MqttBrokerAddress, Config.MqttBrokerPort, lwtTopic);
                 IsMqttConnected = success;
@@ -234,8 +238,11 @@ namespace Hermes.ViewModels
                 if (success)
                 {
                     AddLog("Success", "MQTT 브로커에 성공적으로 연결되었습니다.");
-                    // 연결 성공 시 온라인 상태 발행
                     await _mqttService.PublishAsync(lwtTopic, "{\"state\": \"online\"}", true);
+
+                    // [추가] 모든 PLC의 명령 토픽을 구독
+                    string commandTopic = "cmd/factory-01/assembly/line-a/plc-+/write";
+                    await _mqttService.SubscribeAsync(commandTopic);
                 }
                 else
                 {
@@ -255,6 +262,52 @@ namespace Hermes.ViewModels
             await _mqttService.DisconnectAsync();
             IsMqttConnected = false;
             AddLog("Info", "MQTT 브로커 연결이 해제되었습니다.");
+        }
+
+        /// <summary>
+        /// [신규] MQTT 메시지 수신 시 호출되는 메서드
+        /// </summary>
+        private async void OnMqttMessageReceived(MqttApplicationMessageReceivedEventArgs e)
+        {
+            var topic = e.ApplicationMessage.Topic;
+            var payload = Encoding.UTF8.GetString(e.ApplicationMessage.PayloadSegment);
+
+            AddLog("MQTT-RX", $"토픽: {topic}, 페이로드: {payload}");
+
+            // 토픽 구조: cmd/factory-01/assembly/line-a/plc-{stationNumber}/write/{deviceAddress}
+            // 이 예제에서는 단순화를 위해 토픽 파싱을 간략하게 처리합니다.
+            try
+            {
+                var topicParts = topic.Split('/');
+                if (topicParts.Length < 7 || topicParts[0] != "cmd") return;
+
+                // 'plc-1' -> '1'
+                if (!int.TryParse(topicParts[4].Replace("plc-", ""), out int stationNumber)) return;
+
+                string deviceAddress = topicParts[6];
+
+                // 페이로드 파싱 (예: {"value": 1234})
+                var command = JsonConvert.DeserializeObject<Dictionary<string, short>>(payload);
+                if (command == null || !command.ContainsKey("value")) return;
+
+                short valueToWrite = command["value"];
+
+                // 해당 PLC가 연결되어 있는지 확인
+                var targetPlc = PlcConnections.FirstOrDefault(p => p.StationNumber == stationNumber);
+                if (targetPlc == null || !targetPlc.IsConnected)
+                {
+                    AddLog("Warning", $"명령 수신: 스테이션 {stationNumber}이(가) 연결되어 있지 않습니다.");
+                    return;
+                }
+
+                // PLC에 값 쓰기
+                await _plcManager.WriteDeviceBlockAsync(stationNumber, deviceAddress, new short[] { valueToWrite });
+                AddLog("Success", $"MQTT 명령 실행: 스테이션 {stationNumber}의 {deviceAddress}에 {valueToWrite} 쓰기 완료.");
+            }
+            catch (Exception ex)
+            {
+                AddLog("Error", $"MQTT 명령 처리 중 오류 발생: {ex.Message}");
+            }
         }
         #endregion
 
@@ -289,10 +342,8 @@ namespace Hermes.ViewModels
                             var data = await _plcManager.ReadDeviceBlockAsync(plc.StationNumber, item.DeviceAddress, 1);
                             Application.Current.Dispatcher.Invoke(() => item.CurrentValue = data[0]);
 
-                            // [MQTT 발행 로직 추가]
                             if (_mqttService.IsConnected)
                             {
-                                // dt/{site}/{area}/{line}/{plc_id}/{measurement}
                                 string topic = $"dt/factory-01/assembly/line-a/plc-{plc.StationNumber:D3}/{item.DeviceAddress}";
                                 string payload = JsonConvert.SerializeObject(new { value = data[0], timestamp = DateTime.UtcNow });
                                 await _mqttService.PublishAsync(topic, payload);

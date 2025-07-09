@@ -1,4 +1,6 @@
-﻿using System.Threading.Tasks;
+﻿using MQTTnet.Client;
+using System;
+using System.Threading.Tasks;
 
 namespace Hermes.Services
 {
@@ -8,6 +10,11 @@ namespace Hermes.Services
     public interface IMqttClientService
     {
         bool IsConnected { get; }
+
+        /// <summary>
+        /// 메시지 수신 시 호출될 콜백 액션입니다.
+        /// </summary>
+        Action<MqttApplicationMessageReceivedEventArgs>? MessageReceivedHandler { get; set; }
 
         /// <summary>
         /// MQTT 브로커에 비동기적으로 연결합니다.
@@ -29,5 +36,11 @@ namespace Hermes.Services
         /// <param name="payload">전송할 데이터</param>
         /// <param name="retain">Retain 플래그 설정 여부</param>
         Task PublishAsync(string topic, string payload, bool retain = false);
+
+        /// <summary>
+        /// 지정된 토픽을 구독합니다.
+        /// </summary>
+        /// <param name="topic">구독할 토픽</param>
+        Task SubscribeAsync(string topic);
     }
 }
