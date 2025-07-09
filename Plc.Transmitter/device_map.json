@@ -1,38 +1,65 @@
-﻿[
-  {
-    "deviceAddress": "X0",
-    "description": "메인 램프 스위치"
+﻿{
+  "1": {
+    "description": "1호기 - 메인 라인",
+    "devices": [
+      {
+        "deviceAddress": "X0",
+        "description": "입력 1"
+      },
+      {
+        "deviceAddress": "X10",
+        "description": "입력 2"
+      },
+      {
+        "deviceAddress": "Y0",
+        "description": "출력 1"
+      },
+      {
+        "deviceAddress": "Y10",
+        "description": "츨력 2"
+      }
+    ]
   },
-  {
-    "deviceAddress": "X1",
-    "description": "교반기 스위치"
+  "2": {
+    "description": "2호기 - 조립 라인",
+    "devices": [
+      {
+        "deviceAddress": "X0",
+        "description": "입력 1"
+      },
+      {
+        "deviceAddress": "X10",
+        "description": "입력 2"
+      },
+      {
+        "deviceAddress": "Y0",
+        "description": "출력 1"
+      },
+      {
+        "deviceAddress": "Y10",
+        "description": "츨력 2"
+      }
+    ]
   },
-  {
-    "deviceAddress": "Y0",
-    "description": "메인 램프"
-  },
-  {
-    "deviceAddress": "Y1",
-    "description": "교반기"
-  },
-  {
-    "deviceAddress": "X17",
-    "description": "테스터 스위치"
-  },
-  {
-    "deviceAddress": "Y17",
-    "description": "테스터 램프"
-  },
-  {
-    "deviceAddress": "X10",
-    "description": "테스터 스위치"
-  },
-  {
-    "deviceAddress": "Y10",
-    "description": "테스터 램프"
-  },
-  {
-    "deviceAddress": "D2000",
-    "description": "쓰기 테스트용"
+  "3": {
+    "description": "3호기 - 테스트 스테이션",
+    "devices": [
+      {
+        "deviceAddress": "X0",
+        "description": "입력 1"
+      },
+      {
+        "deviceAddress": "X10",
+        "description": "입력 2"
+      },
+      {
+        "deviceAddress": "Y0",
+        "description": "출력 1"
+      },
+      {
+        "deviceAddress": "Y10",
+        "description": "츨력 2"
+      }
+    ]
   }
-]
+}

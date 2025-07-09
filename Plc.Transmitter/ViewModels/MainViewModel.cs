@@ -16,20 +16,32 @@ namespace Hermes.ViewModels
 {
     public class MainViewModel : ObservableObject
     {
-        private readonly IPlcCommunicationService _plcService;
-
+        private readonly PlcManagerService _plcManager;
         private CancellationTokenSource? _pollingCts;
 
         #region Properties
 
-        private bool _isPlcConnected;
-        public bool IsPlcConnected
+        public ObservableCollection<PlcConnection> PlcConnections { get; } = new();
+
+        private PlcConnection? _selectedPlc;
+        public PlcConnection? SelectedPlc
         {
-            get => _isPlcConnected;
+            get => _selectedPlc;
             set
             {
-                _isPlcConnected = value;
+                if (_selectedPlc != null && _selectedPlc.IsConnected)
+                {
+                    StopPolling();
+                }
+
+                _selectedPlc = value;
                 OnPropertyChanged();
+
+                if (_selectedPlc != null && _selectedPlc.IsConnected)
+                {
+                    StartPolling(_selectedPlc);
+                }
+
                 Application.Current.Dispatcher.Invoke(() =>
                 {
                     ((RelayCommand)ConnectPlcCommand).RaiseCanExecuteChanged();
@@ -47,15 +59,17 @@ namespace Hermes.ViewModels
             {
                 _isMqttConnected = value;
                 OnPropertyChanged();
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    ((RelayCommand)ConnectMqttCommand).RaiseCanExecuteChanged();
+                    ((RelayCommand)DisconnectMqttCommand).RaiseCanExecuteChanged();
+                });
             }
         }
 
         public AppConfig Config { get; } = new AppConfig();
-        public ObservableCollection<LogEntry> Logs { get; } = new ObservableCollection<LogEntry>();
 
-        public ObservableCollection<PlcDataItem> PlcDataItems { get; } = new ObservableCollection<PlcDataItem>();
-
-        private string _writeAddress = "D０";
+        private string _writeAddress = "D2000";
         public string WriteAddress
         {
             get => _writeAddress;
@@ -69,170 +83,205 @@ namespace Hermes.ViewModels
             set { _writeValue = value; OnPropertyChanged(); }
         }
 
+        public ObservableCollection<LogEntry> Logs { get; } = new();
+
         #endregion
 
         #region Commands
         public ICommand ConnectPlcCommand { get; }
         public ICommand DisconnectPlcCommand { get; }
         public ICommand WritePlcValueCommand { get; }
-
+        public ICommand ConnectMqttCommand { get; }
+        public ICommand DisconnectMqttCommand { get; }
         #endregion
 
-        public MainViewModel(IPlcCommunicationService plcService)
+        public MainViewModel(PlcManagerService plcManager)
         {
-            _plcService = plcService ?? throw new ArgumentNullException(nameof(plcService));
+            _plcManager = plcManager ?? throw new ArgumentNullException(nameof(plcManager));
 
-            ConnectPlcCommand = new RelayCommand(async _ => await ExecuteConnectPlcAsync(), _ => !IsPlcConnected);
-            DisconnectPlcCommand = new RelayCommand(async _ => await ExecuteDisconnectPlcAsync(), _ => IsPlcConnected);
-            WritePlcValueCommand = new RelayCommand(async _ => await ExecuteWritePlcValueAsync(), _ => IsPlcConnected);
+            ConnectPlcCommand = new RelayCommand(async _ => await ExecuteConnectPlcAsync(), _ => SelectedPlc != null && !SelectedPlc.IsConnected);
+            DisconnectPlcCommand = new RelayCommand(async _ => await ExecuteDisconnectPlcAsync(), _ => SelectedPlc != null && SelectedPlc.IsConnected);
+            WritePlcValueCommand = new RelayCommand(async _ => await ExecuteWritePlcValueAsync(), _ => SelectedPlc != null && SelectedPlc.IsConnected);
 
-            LoadDeviceMap();
+            // MQTT 커맨드 초기화 (다음 단계에서 실제 로직 구현)
+            ConnectMqttCommand = new RelayCommand(ExecuteConnectMqtt, _ => !IsMqttConnected);
+            DisconnectMqttCommand = new RelayCommand(ExecuteDisconnectMqtt, _ => IsMqttConnected);
+
+            LoadPlcStations();
             AddLog("Info", "애플리케이션이 시작되었습니다.");
         }
 
-        /// <summary>
-        /// [수정] device_map.json 파일에서 모니터링할 디바이스 목록을 로드합니다.
-        /// </summary>
-        private void LoadDeviceMap()
+        // ... (LoadPlcStations, PLC 관련 Execute 메서드 등은 이전과 동일) ...
+        private void LoadPlcStations()
         {
             try
             {
                 string filePath = "device_map.json";
-                if (File.Exists(filePath))
-                {
-                    string json = File.ReadAllText(filePath);
-                    var items = JsonConvert.DeserializeObject<List<PlcDataItem>>(json);
-                    PlcDataItems.Clear();
-                    if (items != null)
-                    {
-                        foreach (var item in items)
-                        {
-                            PlcDataItems.Add(item);
-                        }
-                    }
-                    AddLog("Info", $"{PlcDataItems.Count}개의 디바이스를 설정 파일에서 로드했습니다.");
-                }
-                else
+                if (!File.Exists(filePath))
                 {
                     AddLog("Warning", "device_map.json 설정 파일을 찾을 수 없습니다.");
+                    return;
                 }
+
+                string json = File.ReadAllText(filePath);
+                var stationConfigs = JsonConvert.DeserializeObject<Dictionary<int, PlcStationConfig>>(json);
+
+                PlcConnections.Clear();
+                if (stationConfigs == null) return;
+
+                foreach (var (stationNumber, config) in stationConfigs)
+                {
+                    var plcConnection = new PlcConnection
+                    {
+                        StationNumber = stationNumber,
+                        Description = config.Description
+                    };
+
+                    foreach (var device in config.Devices)
+                    {
+                        plcConnection.DataItems.Add(new PlcDataItem
+                        {
+                            DeviceAddress = device.DeviceAddress,
+                            Description = device.Description
+                        });
+                    }
+                    PlcConnections.Add(plcConnection);
+                }
+                AddLog("Info", $"{PlcConnections.Count}개의 PLC 스테이션을 설정 파일에서 로드했습니다.");
             }
             catch (Exception ex)
             {
-                AddLog("Error", $"디바이스 설정 파일 로드 실패: {ex.Message}");
+                AddLog("Error", $"PLC 스테이션 설정 파일 로드 실패: {ex.Message}");
             }
         }
 
         private async Task ExecuteConnectPlcAsync()
         {
-            AddLog("Info", $"PLC 연결 시도 (스테이션 번호: {Config.PlcStationNumber})...");
+            if (SelectedPlc == null) return;
+
+            var plc = SelectedPlc;
+            AddLog("Info", $"PLC 연결 시도 (스테이션: {plc.StationNumber} - {plc.Description})...");
             try
             {
-                bool success = await _plcService.ConnectAsync(Config.PlcStationNumber);
-                IsPlcConnected = success;
+                bool success = await _plcManager.ConnectAsync(plc.StationNumber);
+                plc.IsConnected = success;
 
                 if (success)
                 {
-                    AddLog("Success", "PLC에 성공적으로 연결되었습니다.");
-                    StartPolling();
+                    AddLog("Success", $"스테이션 {plc.StationNumber}에 성공적으로 연결되었습니다.");
+                    StartPolling(plc);
                 }
                 else
                 {
-                    AddLog("Error", "PLC 연결에 실패했습니다. MX Component 설정 및 PLC 상태를 확인하세요.");
+                    AddLog("Error", $"스테이션 {plc.StationNumber} 연결에 실패했습니다.");
                 }
             }
             catch (Exception ex)
             {
-                IsPlcConnected = false;
-                AddLog("Error", $"PLC 연결 중 예외 발생: {ex.Message}");
-                Debug.WriteLine(ex);
+                plc.IsConnected = false;
+                AddLog("Error", $"스테이션 {plc.StationNumber} 연결 중 예외 발생: {ex.Message}");
             }
         }
 
         private async Task ExecuteDisconnectPlcAsync()
         {
-            AddLog("Info", "PLC 연결 해제 시도...");
+            if (SelectedPlc == null) return;
+
+            var plc = SelectedPlc;
+            AddLog("Info", $"PLC 연결 해제 시도 (스테이션: {plc.StationNumber})...");
             try
             {
                 StopPolling();
-                await _plcService.DisconnectAsync();
-                IsPlcConnected = false;
-                AddLog("Info", "PLC 연결이 해제되었습니다.");
+                await _plcManager.DisconnectAsync(plc.StationNumber);
+                plc.IsConnected = false;
+                AddLog("Info", $"스테이션 {plc.StationNumber} 연결이 해제되었습니다.");
             }
             catch (Exception ex)
             {
-                AddLog("Error", $"PLC 연결 해제 중 예외 발생: {ex.Message}");
-                Debug.WriteLine(ex);
+                AddLog("Error", $"스테이션 {plc.StationNumber} 연결 해제 중 예외 발생: {ex.Message}");
             }
         }
 
         private async Task ExecuteWritePlcValueAsync()
         {
-            if (string.IsNullOrWhiteSpace(WriteAddress))
-            {
-                AddLog("Warning", "값을 쓸 PLC 디바이스 주소를 입력하세요.");
-                return;
-            }
+            if (SelectedPlc == null || string.IsNullOrWhiteSpace(WriteAddress)) return;
 
-            AddLog("Info", $"PLC 쓰기 시도: {WriteAddress}에 {WriteValue} 값 전송...");
+            var plc = SelectedPlc;
+            AddLog("Info", $"PLC 쓰기 시도: 스테이션 {plc.StationNumber}의 {WriteAddress}에 {WriteValue} 값 전송...");
             try
             {
-                bool success = await _plcService.WriteDeviceBlockAsync(WriteAddress, new short[] { WriteValue });
+                bool success = await _plcManager.WriteDeviceBlockAsync(plc.StationNumber, WriteAddress, new short[] { WriteValue });
                 if (success)
                 {
                     AddLog("Success", $"쓰기 성공: {WriteAddress} = {WriteValue}");
                 }
                 else
                 {
-                    // 이 경우는 거의 발생하지 않음. 보통 예외가 발생함.
-                    AddLog("Error", "PLC 쓰기에 실패했습니다. 반환값이 false입니다.");
+                    AddLog("Error", "PLC 쓰기에 실패했습니다.");
                 }
             }
             catch (Exception ex)
             {
-                // [수정] 더 상세한 오류 로깅
-                AddLog("Error", $"PLC 쓰기 중 예외 발생: {ex.Message}. PLC 설정을 확인하세요.");
-                Debug.WriteLine($"[WRITE ERROR] {ex}");
+                AddLog("Error", $"PLC 쓰기 중 예외 발생: {ex.Message}");
             }
         }
 
-        private void StartPolling()
+        #region MQTT Methods
+        private void ExecuteConnectMqtt(object? obj)
+        {
+            AddLog("Info", $"MQTT 브로커 연결 시도: {Config.MqttBrokerAddress}:{Config.MqttBrokerPort}");
+            // TODO: MQTT 서비스 연결 로직 구현
+            IsMqttConnected = true; // 임시로 즉시 성공 처리
+            AddLog("Success", "MQTT 브로커에 임시 연결되었습니다 (기능 구현 필요).");
+        }
+
+        private void ExecuteDisconnectMqtt(object? obj)
+        {
+            AddLog("Info", "MQTT 브로커 연결 해제...");
+            // TODO: MQTT 서비스 연결 해제 로직 구현
+            IsMqttConnected = false;
+            AddLog("Info", "MQTT 브로커 연결이 해제되었습니다.");
+        }
+        #endregion
+
+        #region Polling
+        private void StartPolling(PlcConnection plc)
         {
             _pollingCts?.Cancel();
             _pollingCts = new CancellationTokenSource();
 
-            Task.Run(() => PollingLoopAsync(_pollingCts.Token), _pollingCts.Token);
-            AddLog("Info", "PLC 데이터 폴링을 시작합니다.");
+            Task.Run(() => PollingLoopAsync(plc, _pollingCts.Token), _pollingCts.Token);
+            AddLog("Info", $"스테이션 {plc.StationNumber} 데이터 폴링을 시작합니다.");
         }
 
         private void StopPolling()
         {
             _pollingCts?.Cancel();
             _pollingCts = null;
-            AddLog("Info", "PLC 데이터 폴링을 중지합니다.");
+            AddLog("Info", "데이터 폴링을 중지합니다.");
         }
 
-        private async Task PollingLoopAsync(CancellationToken token)
+        private async Task PollingLoopAsync(PlcConnection plc, CancellationToken token)
         {
-            while (!token.IsCancellationRequested)
+            while (!token.IsCancellationRequested && plc.IsConnected)
             {
                 try
                 {
-                    foreach (var item in PlcDataItems)
+                    foreach (var item in plc.DataItems)
                     {
                         if (token.IsCancellationRequested) break;
 
                         try
                         {
-                            var data = await _plcService.ReadDeviceBlockAsync(item.DeviceAddress, 1);
+                            var data = await _plcManager.ReadDeviceBlockAsync(plc.StationNumber, item.DeviceAddress, 1);
                             Application.Current.Dispatcher.Invoke(() => item.CurrentValue = data[0]);
                         }
                         catch (Exception ex)
                         {
-                            AddLog("Error", $"'{item.DeviceAddress}' 읽기 실패: {ex.Message}");
+                            AddLog("Error", $"스테이션 {plc.StationNumber}의 '{item.DeviceAddress}' 읽기 실패: {ex.Message}");
+                            await Task.Delay(2000, token);
                         }
                     }
-
                     await Task.Delay(1000, token);
                 }
                 catch (TaskCanceledException)
@@ -241,13 +290,14 @@ namespace Hermes.ViewModels
                 }
                 catch (Exception ex)
                 {
-                    AddLog("Critical", $"폴링 루프에서 심각한 오류 발생: {ex.Message}");
-                    await ExecuteDisconnectPlcAsync();
+                    AddLog("Critical", $"폴링 루프 오류 (스테이션: {plc.StationNumber}): {ex.Message}");
+                    Application.Current.Dispatcher.Invoke(() => plc.IsConnected = false);
                     break;
                 }
             }
-            Debug.WriteLine("PollingLoopAsync finished.");
+            Debug.WriteLine($"PollingLoopAsync for Station {plc.StationNumber} finished.");
         }
+        #endregion
 
         private void AddLog(string level, string message)
         {
@@ -259,11 +309,7 @@ namespace Hermes.ViewModels
                     Level = level,
                     Message = message
                 });
-
-                if (Logs.Count > 200)
-                {
-                    Logs.RemoveAt(Logs.Count - 1);
-                }
+                if (Logs.Count > 200) Logs.RemoveAt(Logs.Count - 1);
             });
         }
     }
