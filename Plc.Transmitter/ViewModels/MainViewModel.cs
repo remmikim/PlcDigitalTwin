@@ -17,6 +17,7 @@ namespace Hermes.ViewModels
     public class MainViewModel : ObservableObject
     {
         private readonly PlcManagerService _plcManager;
+        private readonly IMqttClientService _mqttService;
         private CancellationTokenSource? _pollingCts;
 
         #region Properties
@@ -29,18 +30,10 @@ namespace Hermes.ViewModels
             get => _selectedPlc;
             set
             {
-                if (_selectedPlc != null && _selectedPlc.IsConnected)
-                {
-                    StopPolling();
-                }
-
+                if (_selectedPlc != null && _selectedPlc.IsConnected) StopPolling();
                 _selectedPlc = value;
                 OnPropertyChanged();
-
-                if (_selectedPlc != null && _selectedPlc.IsConnected)
-                {
-                    StartPolling(_selectedPlc);
-                }
+                if (_selectedPlc != null && _selectedPlc.IsConnected) StartPolling(_selectedPlc);
 
                 Application.Current.Dispatcher.Invoke(() =>
                 {
@@ -95,23 +88,23 @@ namespace Hermes.ViewModels
         public ICommand DisconnectMqttCommand { get; }
         #endregion
 
-        public MainViewModel(PlcManagerService plcManager)
+        public MainViewModel(PlcManagerService plcManager, IMqttClientService mqttService)
         {
             _plcManager = plcManager ?? throw new ArgumentNullException(nameof(plcManager));
+            _mqttService = mqttService ?? throw new ArgumentNullException(nameof(mqttService));
 
             ConnectPlcCommand = new RelayCommand(async _ => await ExecuteConnectPlcAsync(), _ => SelectedPlc != null && !SelectedPlc.IsConnected);
             DisconnectPlcCommand = new RelayCommand(async _ => await ExecuteDisconnectPlcAsync(), _ => SelectedPlc != null && SelectedPlc.IsConnected);
             WritePlcValueCommand = new RelayCommand(async _ => await ExecuteWritePlcValueAsync(), _ => SelectedPlc != null && SelectedPlc.IsConnected);
 
-            // MQTT 커맨드 초기화 (다음 단계에서 실제 로직 구현)
-            ConnectMqttCommand = new RelayCommand(ExecuteConnectMqtt, _ => !IsMqttConnected);
-            DisconnectMqttCommand = new RelayCommand(ExecuteDisconnectMqtt, _ => IsMqttConnected);
+            ConnectMqttCommand = new RelayCommand(async _ => await ExecuteConnectMqttAsync(), _ => !IsMqttConnected);
+            DisconnectMqttCommand = new RelayCommand(async _ => await ExecuteDisconnectMqttAsync(), _ => IsMqttConnected);
 
             LoadPlcStations();
             AddLog("Info", "애플리케이션이 시작되었습니다.");
         }
 
-        // ... (LoadPlcStations, PLC 관련 Execute 메서드 등은 이전과 동일) ...
+        // ... (PLC 관련 메서드는 이전과 동일) ...
         private void LoadPlcStations()
         {
             try
@@ -227,18 +220,39 @@ namespace Hermes.ViewModels
         }
 
         #region MQTT Methods
-        private void ExecuteConnectMqtt(object? obj)
+        private async Task ExecuteConnectMqttAsync()
         {
             AddLog("Info", $"MQTT 브로커 연결 시도: {Config.MqttBrokerAddress}:{Config.MqttBrokerPort}");
-            // TODO: MQTT 서비스 연결 로직 구현
-            IsMqttConnected = true; // 임시로 즉시 성공 처리
-            AddLog("Success", "MQTT 브로커에 임시 연결되었습니다 (기능 구현 필요).");
+            try
+            {
+                // LWT 토픽: 이 Transmitter의 모든 PLC 연결 상태를 대표하는 토픽
+                // 실제 환경에서는 site/area/line 등을 설정 파일에서 읽어와야 함
+                string lwtTopic = $"status/factory-01/assembly/line-a/transmitter-01/connection";
+                bool success = await _mqttService.ConnectAsync(Config.MqttBrokerAddress, Config.MqttBrokerPort, lwtTopic);
+                IsMqttConnected = success;
+
+                if (success)
+                {
+                    AddLog("Success", "MQTT 브로커에 성공적으로 연결되었습니다.");
+                    // 연결 성공 시 온라인 상태 발행
+                    await _mqttService.PublishAsync(lwtTopic, "{\"state\": \"online\"}", true);
+                }
+                else
+                {
+                    AddLog("Error", "MQTT 브로커 연결에 실패했습니다.");
+                }
+            }
+            catch (Exception ex)
+            {
+                IsMqttConnected = false;
+                AddLog("Error", $"MQTT 연결 중 예외 발생: {ex.Message}");
+            }
         }
 
-        private void ExecuteDisconnectMqtt(object? obj)
+        private async Task ExecuteDisconnectMqttAsync()
         {
             AddLog("Info", "MQTT 브로커 연결 해제...");
-            // TODO: MQTT 서비스 연결 해제 로직 구현
+            await _mqttService.DisconnectAsync();
             IsMqttConnected = false;
             AddLog("Info", "MQTT 브로커 연결이 해제되었습니다.");
         }
@@ -270,24 +284,29 @@ namespace Hermes.ViewModels
                     foreach (var item in plc.DataItems)
                     {
                         if (token.IsCancellationRequested) break;
-
                         try
                         {
                             var data = await _plcManager.ReadDeviceBlockAsync(plc.StationNumber, item.DeviceAddress, 1);
                             Application.Current.Dispatcher.Invoke(() => item.CurrentValue = data[0]);
+
+                            // [MQTT 발행 로직 추가]
+                            if (_mqttService.IsConnected)
+                            {
+                                // dt/{site}/{area}/{line}/{plc_id}/{measurement}
+                                string topic = $"dt/factory-01/assembly/line-a/plc-{plc.StationNumber:D3}/{item.DeviceAddress}";
+                                string payload = JsonConvert.SerializeObject(new { value = data[0], timestamp = DateTime.UtcNow });
+                                await _mqttService.PublishAsync(topic, payload);
+                            }
                         }
                         catch (Exception ex)
                         {
-                            AddLog("Error", $"스테이션 {plc.StationNumber}의 '{item.DeviceAddress}' 읽기 실패: {ex.Message}");
+                            AddLog("Error", $"스테이션 {plc.StationNumber}의 '{item.DeviceAddress}' 읽기/발행 실패: {ex.Message}");
                             await Task.Delay(2000, token);
                         }
                     }
                     await Task.Delay(1000, token);
                 }
-                catch (TaskCanceledException)
-                {
-                    break;
-                }
+                catch (TaskCanceledException) { break; }
                 catch (Exception ex)
                 {
                     AddLog("Critical", $"폴링 루프 오류 (스테이션: {plc.StationNumber}): {ex.Message}");
@@ -303,12 +322,7 @@ namespace Hermes.ViewModels
         {
             Application.Current.Dispatcher.Invoke(() =>
             {
-                Logs.Insert(0, new LogEntry
-                {
-                    Timestamp = DateTime.Now,
-                    Level = level,
-                    Message = message
-                });
+                Logs.Insert(0, new LogEntry { Timestamp = DateTime.Now, Level = level, Message = message });
                 if (Logs.Count > 200) Logs.RemoveAt(Logs.Count - 1);
             });
         }
