@@ -29,7 +29,7 @@ namespace Hermes.Models
             }
         }
 
-        private int _mqttBrokerPort = 8080;
+        private int _mqttBrokerPort = 1883;
         public int MqttBrokerPort
         {
             get => _mqttBrokerPort;
