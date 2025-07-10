@@ -1,6 +1,7 @@
 ﻿/*
  * Server.Core/Services/MqttService.cs
- * 연결 안정성 확보를 위해 MQTT 프로토콜 버전을 명시적으로 지정합니다.
+ * IMqttService 인터페이스의 실제 구현체입니다.
+ * MQTTnet 라이브러리를 사용하여 브로커와의 통신을 관리합니다.
  */
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -38,15 +39,15 @@ namespace Server.Core.Services
                 .WithClientOptions(new MqttClientOptionsBuilder()
                     .WithTcpServer(_config.Address, _config.Port)
                     .WithClientId($"plc-server-core-{Guid.NewGuid()}")
-                    .WithProtocolVersion(MQTTnet.Formatter.MqttProtocolVersion.V311) // <-- 이 줄을 추가하여 프로토콜 버전을 명시합니다.
                     .WithCleanSession()
                     .Build())
                 .Build();
 
+            // 구독할 토픽 설정
             var topicFilters = new List<MqttTopicFilter>
             {
-                new MqttTopicFilterBuilder().WithTopic("dt/#").Build(),
-                new MqttTopicFilterBuilder().WithTopic("status/#").Build()
+                new MqttTopicFilterBuilder().WithTopic("dt/#").Build(),      // 모든 텔레메트리 데이터
+                new MqttTopicFilterBuilder().WithTopic("status/#").Build() // 모든 상태 데이터
             };
             await _managedMqttClient.SubscribeAsync(topicFilters);
 
@@ -68,7 +69,7 @@ namespace Server.Core.Services
             var message = new MqttApplicationMessageBuilder()
                 .WithTopic(topic)
                 .WithPayload(payload)
-                .WithQualityOfServiceLevel(MQTTnet.Protocol.MqttQualityOfServiceLevel.ExactlyOnce)
+                .WithQualityOfServiceLevel(MQTTnet.Protocol.MqttQualityOfServiceLevel.ExactlyOnce) // QoS 2
                 .WithRetainFlag(retain)
                 .Build();
 

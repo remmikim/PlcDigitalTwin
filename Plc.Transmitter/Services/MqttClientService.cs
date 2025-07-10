@@ -1,8 +1,4 @@
-﻿/*
- * Plc.Transmitter/Services/MqttClientService.cs
- * 연결 안정성 확보를 위해 MQTT 프로토콜 버전을 명시적으로 지정합니다.
- */
-using MQTTnet;
+﻿using MQTTnet;
 using MQTTnet.Client;
 using System;
 using System.Diagnostics;
@@ -34,6 +30,7 @@ namespace Hermes.Services
                 return Task.CompletedTask;
             };
 
+            // [추가] 메시지 수신 이벤트 핸들러
             _mqttClient.ApplicationMessageReceivedAsync += e =>
             {
                 MessageReceivedHandler?.Invoke(e);
@@ -48,7 +45,6 @@ namespace Hermes.Services
             var options = new MqttClientOptionsBuilder()
                 .WithTcpServer(address, port)
                 .WithClientId($"hermes-transmitter-{Guid.NewGuid()}")
-                .WithProtocolVersion(MQTTnet.Formatter.MqttProtocolVersion.V311) // <-- 이 줄을 추가하여 프로토콜 버전을 명시합니다.
                 .WithCleanSession()
                 .WithWillTopic(lwtTopic)
                 .WithWillPayload(lwtPayload)
@@ -89,6 +85,9 @@ namespace Hermes.Services
             await _mqttClient.PublishAsync(message, CancellationToken.None);
         }
 
+        /// <summary>
+        /// [추가] 토픽 구독 메서드
+        /// </summary>
         public async Task SubscribeAsync(string topic)
         {
             if (!_mqttClient.IsConnected) return;
