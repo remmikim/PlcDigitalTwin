@@ -27,15 +27,11 @@ namespace Hermes.Services
 
             _mqttClient.DisconnectedAsync += e =>
             {
-                // =================================================================
-                // [수정] 연결 해제 원인을 자세히 로깅하도록 변경
-                // =================================================================
                 string logMessage = $"### MQTT: DISCONNECTED FROM SERVER. Reason: {e.ReasonString}, WasClean: {e.ClientWasConnected} ###";
                 Debug.WriteLine(logMessage);
                 return Task.CompletedTask;
             };
 
-            // [추가] 메시지 수신 이벤트 핸들러
             _mqttClient.ApplicationMessageReceivedAsync += e =>
             {
                 MessageReceivedHandler?.Invoke(e);
@@ -43,19 +39,27 @@ namespace Hermes.Services
             };
         }
 
-        public async Task<bool> ConnectAsync(string address, int port, string lwtTopic)
+        // [수정] ConnectAsync 메서드에 username, password 파라미터 추가
+        public async Task<bool> ConnectAsync(string address, int port, string lwtTopic, string username, string password)
         {
             var lwtPayload = "{\"state\": \"offline\"}";
 
-            var options = new MqttClientOptionsBuilder()
+            var optionsBuilder = new MqttClientOptionsBuilder()
                 .WithTcpServer(address, port)
                 .WithClientId($"hermes-transmitter-{Guid.NewGuid()}")
                 .WithCleanSession()
                 .WithWillTopic(lwtTopic)
                 .WithWillPayload(lwtPayload)
                 .WithWillRetain(true)
-                .WithWillQualityOfServiceLevel(MQTTnet.Protocol.MqttQualityOfServiceLevel.AtLeastOnce)
-                .Build();
+                .WithWillQualityOfServiceLevel(MQTTnet.Protocol.MqttQualityOfServiceLevel.AtLeastOnce);
+
+            // 사용자 이름이 설정된 경우에만 인증 정보 추가
+            if (!string.IsNullOrEmpty(username))
+            {
+                optionsBuilder.WithCredentials(username, password);
+            }
+
+            var options = optionsBuilder.Build();
 
             try
             {
@@ -72,7 +76,6 @@ namespace Hermes.Services
         {
             if (_mqttClient.IsConnected)
             {
-                // 정상적인 연결 해제를 위해 옵션을 설정합니다.
                 var options = new MqttClientDisconnectOptions
                 {
                     Reason = MqttClientDisconnectOptionsReason.NormalDisconnection,
@@ -84,7 +87,11 @@ namespace Hermes.Services
 
         public async Task PublishAsync(string topic, string payload, bool retain = false)
         {
-            if (!_mqttClient.IsConnected) return;
+            if (!_mqttClient.IsConnected)
+            {
+                // [수정] 예외를 던져서 호출자가 문제를 인지하게 함
+                throw new InvalidOperationException("The MQTT client is disconnected.");
+            }
 
             var message = new MqttApplicationMessageBuilder()
                 .WithTopic(topic)
@@ -96,12 +103,13 @@ namespace Hermes.Services
             await _mqttClient.PublishAsync(message, CancellationToken.None);
         }
 
-        /// <summary>
-        /// [추가] 토픽 구독 메서드
-        /// </summary>
         public async Task SubscribeAsync(string topic)
         {
-            if (!_mqttClient.IsConnected) return;
+            if (!_mqttClient.IsConnected)
+            {
+                // [수정] 예외를 던져서 호출자가 문제를 인지하게 함
+                throw new InvalidOperationException("The MQTT client is disconnected.");
+            }
 
             await _mqttClient.SubscribeAsync(new MqttTopicFilterBuilder().WithTopic(topic).Build());
             Debug.WriteLine($"### MQTT: SUBSCRIBED TO TOPIC: {topic} ###");
@@ -109,15 +117,10 @@ namespace Hermes.Services
 
         public void Dispose()
         {
-            // Dispose 시에 연결을 비동기적으로 끊으려고 시도합니다.
-            // 하지만 App.OnExit과 같은 동기 컨텍스트에서는 문제가 될 수 있으므로
-            // Task.Run을 사용하여 별도 스레드에서 실행하거나,
-            // 혹은 DisconnectAsync를 미리 호출하도록 유도하는 것이 좋습니다.
             if (_mqttClient.IsConnected)
             {
                 try
                 {
-                    // 애플리케이션 종료 시에는 동기적으로 기다리는 것이 더 안정적일 수 있습니다.
                     _mqttClient.DisconnectAsync().GetAwaiter().GetResult();
                 }
                 catch (Exception ex)

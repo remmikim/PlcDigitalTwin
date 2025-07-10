@@ -34,13 +34,21 @@ namespace Server.Core.Services
             var factory = new MqttFactory();
             _managedMqttClient = factory.CreateManagedMqttClient();
 
+            // [수정] MqttClientOptionsBuilder에 사용자 인증 정보 추가
+            var clientOptionsBuilder = new MqttClientOptionsBuilder()
+                .WithTcpServer(_config.Address, _config.Port)
+                .WithClientId($"plc-server-core-{Guid.NewGuid()}")
+                .WithCleanSession();
+
+            // 사용자 이름이 설정된 경우에만 인증 정보 추가
+            if (!string.IsNullOrEmpty(_config.Username))
+            {
+                clientOptionsBuilder.WithCredentials(_config.Username, _config.Password);
+            }
+
             var options = new ManagedMqttClientOptionsBuilder()
                 .WithAutoReconnectDelay(TimeSpan.FromSeconds(5))
-                .WithClientOptions(new MqttClientOptionsBuilder()
-                    .WithTcpServer(_config.Address, _config.Port)
-                    .WithClientId($"plc-server-core-{Guid.NewGuid()}")
-                    .WithCleanSession()
-                    .Build())
+                .WithClientOptions(clientOptionsBuilder.Build())
                 .Build();
 
             // 구독할 토픽 설정

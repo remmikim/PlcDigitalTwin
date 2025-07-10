@@ -39,5 +39,28 @@ namespace Hermes.Models
                 OnPropertyChanged();
             }
         }
+
+        // [추가] MQTT 사용자 이름과 비밀번호 속성
+        private string _mqttUsername = "hermes_user";
+        public string MqttUsername
+        {
+            get => _mqttUsername;
+            set
+            {
+                _mqttUsername = value;
+                OnPropertyChanged();
+            }
+        }
+
+        private string _mqttPassword = "1234";
+        public string MqttPassword
+        {
+            get => _mqttPassword;
+            set
+            {
+                _mqttPassword = value;
+                OnPropertyChanged();
+            }
+        }
     }
 }

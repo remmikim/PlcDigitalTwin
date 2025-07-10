@@ -22,7 +22,9 @@ namespace Hermes.Services
         /// <param name="address">브로커 주소</param>
         /// <param name="port">브로커 포트</param>
         /// <param name="lwtTopic">LWT(Last Will and Testament) 토픽</param>
-        Task<bool> ConnectAsync(string address, int port, string lwtTopic);
+        /// <param name="username">사용자 이름</param>
+        /// <param name="password">비밀번호</param>
+        Task<bool> ConnectAsync(string address, int port, string lwtTopic, string username, string password);
 
         /// <summary>
         /// MQTT 브로커와의 연결을 비동기적으로 해제합니다.

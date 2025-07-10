@@ -14,6 +14,9 @@ namespace Server.Core.Models
     {
         public string Address { get; set; } = string.Empty;
         public int Port { get; set; }
+        // [추가] 사용자 이름과 비밀번호 속성
+        public string Username { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
     }
 
     public class FirebaseConfig

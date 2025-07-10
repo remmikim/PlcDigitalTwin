@@ -230,27 +230,32 @@ namespace Hermes.ViewModels
             try
             {
                 string lwtTopic = $"status/factory-01/assembly/line-a/transmitter-01/connection";
-                bool success = await _mqttService.ConnectAsync(Config.MqttBrokerAddress, Config.MqttBrokerPort, lwtTopic);
+
+                // [수정] _mqttService.ConnectAsync 호출 시 사용자 이름과 비밀번호 전달
+                bool success = await _mqttService.ConnectAsync(
+                    Config.MqttBrokerAddress,
+                    Config.MqttBrokerPort,
+                    lwtTopic,
+                    Config.MqttUsername,
+                    Config.MqttPassword
+                );
+
                 IsMqttConnected = success;
 
                 if (success)
                 {
                     AddLog("Success", "MQTT 브로커에 성공적으로 연결되었습니다.");
 
-                    // =================================================================
-                    // [수정] 연결 직후 아주 짧은 지연 시간을 추가하여
-                    // MQTT 클라이언트가 내부적으로 완전히 준비될 때까지 기다립니다.
-                    // =================================================================
-                    await Task.Delay(200); // 200ms 정도면 충분합니다.
+                    await Task.Delay(200);
 
                     await _mqttService.PublishAsync(lwtTopic, "{\"state\": \"online\"}", true);
 
-                    string commandTopic = "cmd/factory-01/assembly/line-a/plc-+/write";
+                    string commandTopic = "cmd/factory-01/assembly/line-a/plc-+/write/#"; // 와일드카드 수정
                     await _mqttService.SubscribeAsync(commandTopic);
                 }
                 else
                 {
-                    AddLog("Error", "MQTT 브로커 연결에 실패했습니다.");
+                    AddLog("Error", "MQTT 브로커 연결에 실패했습니다. (사용자 이름/비밀번호 확인)");
                 }
             }
             catch (Exception ex)
