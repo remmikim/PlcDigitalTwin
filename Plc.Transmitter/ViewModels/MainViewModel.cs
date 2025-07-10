@@ -23,6 +23,9 @@ namespace Hermes.ViewModels
         private readonly IMqttClientService _mqttService;
         private CancellationTokenSource? _pollingCts;
 
+        // --- [수정 1] 애플리케이션 인스턴스별 고유 ID 생성 ---
+        private readonly string _transmitterId = $"transmitter-{Guid.NewGuid().ToString().Substring(0, 8)}";
+
         #region Properties
 
         public ObservableCollection<PlcConnection> PlcConnections { get; } = new();
@@ -33,10 +36,12 @@ namespace Hermes.ViewModels
             get => _selectedPlc;
             set
             {
-                if (_selectedPlc != null && _selectedPlc.IsConnected) StopPolling();
+                // StopPolling은 연결이 해제될 때만 호출하도록 로직 변경
+                // if (_selectedPlc != null && _selectedPlc.IsConnected) StopPolling();
                 _selectedPlc = value;
                 OnPropertyChanged();
-                if (_selectedPlc != null && _selectedPlc.IsConnected) StartPolling(_selectedPlc);
+                // StartPolling은 PLC 연결 성공 시에만 호출
+                // if (_selectedPlc != null && _selectedPlc.IsConnected) StartPolling(_selectedPlc);
 
                 Application.Current.Dispatcher.Invoke(() =>
                 {
@@ -98,7 +103,7 @@ namespace Hermes.ViewModels
 
             _mqttService.MessageReceivedHandler = OnMqttMessageReceived;
 
-            ConnectPlcCommand = new RelayCommand(async _ => await ExecuteConnectPlcAsync(), _ => SelectedPlc != null && !SelectedPlc.IsConnected);
+            ConnectPlcCommand = new RelayCommand(async _ => await ExecuteConnectPlcAsync(), _ => SelectedPlc != null && !SelectedPlc.IsConnected && IsMqttConnected);
             DisconnectPlcCommand = new RelayCommand(async _ => await ExecuteDisconnectPlcAsync(), _ => SelectedPlc != null && SelectedPlc.IsConnected);
             WritePlcValueCommand = new RelayCommand(async _ => await ExecuteWritePlcValueAsync(), _ => SelectedPlc != null && SelectedPlc.IsConnected);
 
@@ -106,7 +111,7 @@ namespace Hermes.ViewModels
             DisconnectMqttCommand = new RelayCommand(async _ => await ExecuteDisconnectMqttAsync(), _ => IsMqttConnected);
 
             LoadPlcStations();
-            AddLog("Info", "애플리케이션이 시작되었습니다.");
+            AddLog("Info", $"애플리케이션이 시작되었습니다. Transmitter ID: {_transmitterId}");
         }
 
         private void LoadPlcStations()
@@ -166,6 +171,8 @@ namespace Hermes.ViewModels
                 if (success)
                 {
                     AddLog("Success", $"스테이션 {plc.StationNumber}에 성공적으로 연결되었습니다.");
+                    // --- [수정 3] PLC 개별 상태 'online' 발행 ---
+                    await PublishPlcStatusAsync(plc.StationNumber, true);
                     StartPolling(plc);
                 }
                 else
@@ -191,6 +198,8 @@ namespace Hermes.ViewModels
                 StopPolling();
                 await _plcManager.DisconnectAsync(plc.StationNumber);
                 plc.IsConnected = false;
+                // --- [수정 4] PLC 개별 상태 'offline' 발행 ---
+                await PublishPlcStatusAsync(plc.StationNumber, false);
                 AddLog("Info", $"스테이션 {plc.StationNumber} 연결이 해제되었습니다.");
             }
             catch (Exception ex)
@@ -229,16 +238,19 @@ namespace Hermes.ViewModels
             AddLog("Info", $"MQTT 브로커 연결 시도: {Config.MqttBrokerAddress}:{Config.MqttBrokerPort}");
             try
             {
-                string lwtTopic = $"status/factory-01/assembly/line-a/transmitter-01/connection";
+                // --- [수정 2] LWT 토픽에 고유 ID 사용 ---
+                string lwtTopic = $"status/factory-01/assembly/line-a/{_transmitterId}/connection";
                 bool success = await _mqttService.ConnectAsync(Config.MqttBrokerAddress, Config.MqttBrokerPort, lwtTopic);
                 IsMqttConnected = success;
 
                 if (success)
                 {
                     AddLog("Success", "MQTT 브로커에 성공적으로 연결되었습니다.");
+                    // 애플리케이션 자체의 상태를 online으로 발행
                     await _mqttService.PublishAsync(lwtTopic, "{\"state\": \"online\"}", true);
 
-                    string commandTopic = "cmd/factory-01/assembly/line-a/plc-+/write";
+                    // 명령 토픽 구독
+                    string commandTopic = "cmd/factory-01/assembly/line-a/plc-+/write/#";
                     await _mqttService.SubscribeAsync(commandTopic);
                 }
                 else
@@ -256,9 +268,25 @@ namespace Hermes.ViewModels
         private async Task ExecuteDisconnectMqttAsync()
         {
             AddLog("Info", "MQTT 브로커 연결 해제...");
+            // 모든 PLC 연결 해제 및 오프라인 상태 발행
+            foreach (var plc in PlcConnections.Where(p => p.IsConnected))
+            {
+                await ExecuteDisconnectPlcAsync();
+            }
             await _mqttService.DisconnectAsync();
             IsMqttConnected = false;
             AddLog("Info", "MQTT 브로커 연결이 해제되었습니다.");
+        }
+
+        // --- [수정 5] PLC 상태 발행을 위한 헬퍼 메서드 추가 ---
+        private async Task PublishPlcStatusAsync(int stationNumber, bool isOnline)
+        {
+            if (!IsMqttConnected) return;
+
+            string statusTopic = $"status/factory-01/assembly/line-a/plc-{stationNumber:D3}/connection";
+            var statusPayload = new { state = isOnline ? "online" : "offline", timestamp = DateTime.UtcNow };
+            await _mqttService.PublishAsync(statusTopic, JsonConvert.SerializeObject(statusPayload), true);
+            AddLog("MQTT-TX", $"PLC Status Published: {statusTopic} -> {statusPayload.state}");
         }
 
         private async void OnMqttMessageReceived(MqttApplicationMessageReceivedEventArgs e)
@@ -274,7 +302,6 @@ namespace Hermes.ViewModels
                 if (topicParts.Length < 7 || topicParts[0] != "cmd") return;
 
                 if (!int.TryParse(topicParts[4].Replace("plc-", ""), out int stationNumber)) return;
-
                 string deviceAddress = topicParts[6];
 
                 var command = JsonConvert.DeserializeObject<Dictionary<string, short>>(payload);
@@ -302,9 +329,7 @@ namespace Hermes.ViewModels
         #region Polling
         private void StartPolling(PlcConnection plc)
         {
-            _pollingCts?.Cancel();
             _pollingCts = new CancellationTokenSource();
-
             Task.Run(() => PollingLoopAsync(plc, _pollingCts.Token), _pollingCts.Token);
             AddLog("Info", $"스테이션 {plc.StationNumber} 데이터 폴링을 시작합니다.");
         }
@@ -313,7 +338,6 @@ namespace Hermes.ViewModels
         {
             _pollingCts?.Cancel();
             _pollingCts = null;
-            AddLog("Info", "데이터 폴링을 중지합니다.");
         }
 
         private async Task PollingLoopAsync(PlcConnection plc, CancellationToken token)
@@ -350,10 +374,12 @@ namespace Hermes.ViewModels
                 {
                     AddLog("Critical", $"폴링 루프 오류 (스테이션: {plc.StationNumber}): {ex.Message}");
                     Application.Current.Dispatcher.Invoke(() => plc.IsConnected = false);
+                    // 연결이 끊겼으므로 오프라인 상태 발행
+                    await PublishPlcStatusAsync(plc.StationNumber, false);
                     break;
                 }
             }
-            Debug.WriteLine($"PollingLoopAsync for Station {plc.StationNumber} finished.");
+            AddLog("Info", $"스테이션 {plc.StationNumber} 데이터 폴링이 중지되었습니다.");
         }
         #endregion
 
