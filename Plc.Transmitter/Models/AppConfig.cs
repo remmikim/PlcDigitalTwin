@@ -39,5 +39,25 @@ namespace Hermes.Models
                 OnPropertyChanged();
             }
         }
+        private string _mqttUsername = "hermes_user";
+        public string MqttUsername
+        {
+            get => _mqttUsername;
+            set
+            {
+                _mqttUsername = value;
+                OnPropertyChanged();
+            }
+        }
+        private string _mqttPassword = "1234";
+        public string MqttPassword
+        {
+            get => _mqttPassword;
+            set
+            {
+                _mqttPassword = value;
+                OnPropertyChanged();
+            }
+        }
     }
 }
