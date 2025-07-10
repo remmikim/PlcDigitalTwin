@@ -230,32 +230,20 @@ namespace Hermes.ViewModels
             try
             {
                 string lwtTopic = $"status/factory-01/assembly/line-a/transmitter-01/connection";
-
-                // [수정] _mqttService.ConnectAsync 호출 시 사용자 이름과 비밀번호 전달
-                bool success = await _mqttService.ConnectAsync(
-                    Config.MqttBrokerAddress,
-                    Config.MqttBrokerPort,
-                    lwtTopic,
-                    Config.MqttUsername,
-                    Config.MqttPassword
-                );
-
+                bool success = await _mqttService.ConnectAsync(Config.MqttBrokerAddress, Config.MqttBrokerPort, lwtTopic);
                 IsMqttConnected = success;
 
                 if (success)
                 {
                     AddLog("Success", "MQTT 브로커에 성공적으로 연결되었습니다.");
-
-                    await Task.Delay(200);
-
                     await _mqttService.PublishAsync(lwtTopic, "{\"state\": \"online\"}", true);
 
-                    string commandTopic = "cmd/factory-01/assembly/line-a/plc-+/write/#"; // 와일드카드 수정
+                    string commandTopic = "cmd/factory-01/assembly/line-a/plc-+/write";
                     await _mqttService.SubscribeAsync(commandTopic);
                 }
                 else
                 {
-                    AddLog("Error", "MQTT 브로커 연결에 실패했습니다. (사용자 이름/비밀번호 확인)");
+                    AddLog("Error", "MQTT 브로커 연결에 실패했습니다.");
                 }
             }
             catch (Exception ex)
@@ -346,7 +334,11 @@ namespace Hermes.ViewModels
                             {
                                 string topic = $"dt/factory-01/assembly/line-a/plc-{plc.StationNumber:D3}/{item.DeviceAddress}";
                                 string payload = JsonConvert.SerializeObject(new { value = data[0], timestamp = DateTime.UtcNow });
-                                await _mqttService.PublishAsync(topic, payload);
+
+                                // [수정] PublishAsync 호출 시 세 번째 인자(retain)로 true를 전달합니다.
+                                // 이렇게 하면 MQTT 브로커가 이 토픽의 마지막 메시지를 저장하게 되어,
+                                // 새로운 구독자가 접속했을 때 즉시 마지막 상태 값을 수신할 수 있습니다.
+                                await _mqttService.PublishAsync(topic, payload, true);
                             }
                         }
                         catch (Exception ex)
