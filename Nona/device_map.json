@@ -1,0 +1,74 @@
+﻿{
+  "1": {
+    "site": "factory-01",
+    "area": "assembly",
+    "line": "line-a",
+    "description": "1호기 - 의성 1호기",
+    "devices": [
+      {
+        "deviceAddress": "X0",
+        "description": "입력 1"
+      },
+      {
+        "deviceAddress": "X10",
+        "description": "입력 2"
+      },
+      {
+        "deviceAddress": "Y0",
+        "description": "출력 1"
+      },
+      {
+        "deviceAddress": "Y10",
+        "description": "츨력 2"
+      }
+    ]
+  },
+  "2": {
+    "site": "factory-02",
+    "area": "painting",
+    "line": "line-b",
+    "description": "2호기 - 의성 2호기",
+    "devices": [
+      {
+        "deviceAddress": "X0",
+        "description": "입력 1"
+      },
+      {
+        "deviceAddress": "X10",
+        "description": "입력 2"
+      },
+      {
+        "deviceAddress": "Y0",
+        "description": "출력 1"
+      },
+      {
+        "deviceAddress": "Y10",
+        "description": "츨력 2"
+      }
+    ]
+  },
+  "3": {
+    "site": "factory-03",
+    "area": "packaging",
+    "line": "line-c",
+    "description": "3호기 - 구미 1호기",
+    "devices": [
+      {
+        "deviceAddress": "X0",
+        "description": "입력 1"
+      },
+      {
+        "deviceAddress": "X10",
+        "description": "입력 2"
+      },
+      {
+        "deviceAddress": "Y0",
+        "description": "출력 1"
+      },
+      {
+        "deviceAddress": "Y10",
+        "description": "츨력 2"
+      }
+    ]
+  }
+}
