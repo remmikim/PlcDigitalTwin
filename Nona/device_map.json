@@ -1,5 +1,8 @@
 ﻿{
   "1": {
+    "site": "factory-01",
+    "area": "assembly",
+    "line": "line-a",
     "description": "1호기 - 의성 1호기",
     "devices": [
       {
@@ -21,6 +24,9 @@
     ]
   },
   "2": {
+    "site": "factory-02",
+    "area": "painting",
+    "line": "line-b",
     "description": "2호기 - 의성 2호기",
     "devices": [
       {
@@ -42,7 +48,10 @@
     ]
   },
   "3": {
-    "description": "3호기 - 의성 2호기",
+    "site": "factory-03",
+    "area": "packaging",
+    "line": "line-c",
+    "description": "3호기 - 구미 1호기",
     "devices": [
       {
         "deviceAddress": "X0",

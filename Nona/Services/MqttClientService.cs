@@ -2,6 +2,7 @@
 using MQTTnet.Client;
 using System;
 using System.Diagnostics;
+using System.Security.Policy;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -46,7 +47,7 @@ namespace Nona.Services
 
             var optionsBuilder = new MqttClientOptionsBuilder()
                 .WithTcpServer(address, port)
-                .WithClientId($"hermes-transmitter-{Guid.NewGuid()}")
+                .WithClientId($"site-{Guid.NewGuid()}")
                 .WithCleanSession()
                 .WithWillTopic(lwtTopic)
                 .WithWillPayload(lwtPayload)

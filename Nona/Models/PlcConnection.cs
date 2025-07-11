@@ -10,6 +10,11 @@ namespace Nona.Models
     {
         public int StationNumber { get; set; }
 
+        // [추가] 토픽 생성을 위한 계층 정보
+        public string Site { get; set; } = string.Empty;
+        public string Area { get; set; } = string.Empty;
+        public string Line { get; set; } = string.Empty;
+
         public string Description { get; set; } = string.Empty;
 
         private bool _isConnected;

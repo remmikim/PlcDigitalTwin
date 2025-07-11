@@ -55,7 +55,8 @@ namespace Decima.Services
             var topicFilters = new List<MqttTopicFilter>
             {
                 new MqttTopicFilterBuilder().WithTopic("dt/#").Build(),      // 모든 텔레메트리 데이터
-                new MqttTopicFilterBuilder().WithTopic("status/#").Build() // 모든 상태 데이터
+                new MqttTopicFilterBuilder().WithTopic("status/#").Build(), // 모든 상태 데이터
+                new MqttTopicFilterBuilder().WithTopic("command/#").Build() // 모든 명령 데이터
             };
             await _managedMqttClient.SubscribeAsync(topicFilters);
 

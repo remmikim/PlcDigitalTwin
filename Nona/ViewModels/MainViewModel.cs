@@ -107,6 +107,9 @@ namespace Nona.ViewModels
 
             LoadPlcStations();
             AddLog("Info", "애플리케이션이 시작되었습니다.");
+
+            // [수정] 불필요하고 문제를 일으키는 자동 연결 시도 코드를 삭제합니다.
+            // _ = ExecuteConnectMqttAsync(); 
         }
 
         private void LoadPlcStations()
@@ -131,7 +134,10 @@ namespace Nona.ViewModels
                     var plcConnection = new PlcConnection
                     {
                         StationNumber = stationNumber,
-                        Description = config.Description
+                        Description = config.Description,
+                        Site = config.Site,
+                        Area = config.Area,
+                        Line = config.Line
                     };
 
                     foreach (var device in config.Devices)
@@ -231,10 +237,6 @@ namespace Nona.ViewModels
             {
                 string lwtTopic = $"status/factory-01/assembly/line-a/transmitter-01/connection";
 
-                // =================================================================
-                // [수정] _mqttService.ConnectAsync 호출 시 사용자 이름과 비밀번호를
-                // Config 객체에서 가져와 전달합니다.
-                // =================================================================
                 bool success = await _mqttService.ConnectAsync(
                     Config.MqttBrokerAddress,
                     Config.MqttBrokerPort,
@@ -253,7 +255,7 @@ namespace Nona.ViewModels
 
                     await _mqttService.PublishAsync(lwtTopic, "{\"state\": \"online\"}", true);
 
-                    string commandTopic = "cmd/factory-01/assembly/line-a/plc-+/write/#";
+                    string commandTopic = "cmd/+/+/+/plc-+/write/#";
                     await _mqttService.SubscribeAsync(commandTopic);
                 }
                 else
@@ -288,7 +290,8 @@ namespace Nona.ViewModels
                 var topicParts = topic.Split('/');
                 if (topicParts.Length < 7 || topicParts[0] != "cmd") return;
 
-                if (!int.TryParse(topicParts[4].Replace("plc-", ""), out int stationNumber)) return;
+                string plcIdString = topicParts[4].Replace("plc-", "");
+                if (!int.TryParse(plcIdString, out int stationNumber)) return;
 
                 string deviceAddress = topicParts[6];
 
@@ -343,13 +346,35 @@ namespace Nona.ViewModels
                         try
                         {
                             var data = await _plcManager.ReadDeviceBlockAsync(plc.StationNumber, item.DeviceAddress, 1);
-                            Application.Current.Dispatcher.Invoke(() => item.CurrentValue = data[0]);
+                            short newValue = data[0];
 
-                            if (_mqttService.IsConnected)
+                            if (item.CurrentValue != newValue)
                             {
-                                string topic = $"dt/factory-01/assembly/line-a/plc-{plc.StationNumber:D3}/{item.DeviceAddress}";
-                                string payload = JsonConvert.SerializeObject(new { value = data[0], timestamp = DateTime.UtcNow });
-                                await _mqttService.PublishAsync(topic, payload);
+                                Application.Current.Dispatcher.Invoke(() => item.CurrentValue = newValue);
+
+                                // [수정] 사용자의 요청에 따라, PLC 값 변경 시 MQTT 연결 및 발행을 시도합니다.
+                                AddLog("Info", "PLC data changed. Attempting to connect and publish.");
+
+                                // ExecuteConnectMqttAsync는 UI 속성을 업데이트하므로 UI 스레드에서 호출해야 합니다.
+                                await Application.Current.Dispatcher.Invoke(async () => {
+                                    await ExecuteConnectMqttAsync();
+                                });
+
+                                // 연결 시도 후, 최종적으로 연결 상태를 확인하고 데이터를 발행합니다.
+                                if (_mqttService.IsConnected)
+                                {
+                                    string topic = $"dt/{plc.Site}/{plc.Area}/{plc.Line}/plc-{plc.StationNumber:D3}/{item.DeviceAddress}";
+                                    string payload = JsonConvert.SerializeObject(new { value = newValue, timestamp = DateTime.UtcNow });
+
+                                    AddLog("MQTT-TX", $"Publishing to Topic: {topic}");
+                                    AddLog("MQTT-TX", $"Payload: {payload}");
+
+                                    await _mqttService.PublishAsync(topic, payload);
+                                }
+                                else
+                                {
+                                    AddLog("Error", "MQTT Connection failed. Could not publish message.");
+                                }
                             }
                         }
                         catch (Exception ex)
