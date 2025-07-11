@@ -5,7 +5,7 @@ using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Hermes.Services
+namespace Nona.Services
 {
     /// <summary>
     /// ActUtlType64.dll COM 컴포넌트와 안정적으로 통신하기 위한 서비스 클래스.

@@ -1,13 +1,13 @@
-﻿<Window x:Class="Hermes.Views.MainWindow"
+﻿<Window x:Class="Nona.Views.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:viewModels="clr-namespace:Hermes.ViewModels"
-        xmlns:helpers="clr-namespace:Hermes.Helpers"
+        xmlns:viewModels="clr-namespace:Nona.ViewModels"
+        xmlns:helpers="clr-namespace:Nona.Helpers"
         mc:Ignorable="d"
         d:DataContext="{d:DesignInstance Type=viewModels:MainViewModel, IsDesignTimeCreatable=True}"
-        Title="Hermes PLC Transmitter" Height="720" Width="1280"
+        Title="Nona PLC Transmitter" Height="720" Width="1280"
         FontFamily="Segoe UI" Background="#FF2D2D30"
         Foreground="#FFCCCCCC">
     <Window.Resources>
@@ -136,7 +136,7 @@
                     <!-- Buttons are docked to the bottom -->
                     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
                         <Ellipse Style="{StaticResource StatusIndicator}" DataContext="{Binding IsMqttConnected}"/>
-                        <Button Content="연결" Command="{Binding ConnectMqttCommand}"/>
+                        <Button Content="연결" Command="{Binding ConnectMqttCommand}" Click="Button_Click"/>
                         <Button Content="해제" Command="{Binding DisconnectMqttCommand}"/>
                     </StackPanel>
 
