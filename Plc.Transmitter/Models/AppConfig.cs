@@ -18,7 +18,7 @@ namespace Hermes.Models
             }
         }
 
-        private string _mqttBrokerAddress = "127.0.0.1";
+        private string _mqttBrokerAddress = "192.168.68.50";
         public string MqttBrokerAddress
         {
             get => _mqttBrokerAddress;
