@@ -1,97 +1,93 @@
 ﻿using MQTTnet;
 using MQTTnet.Client;
+using MQTTnet.Extensions.ManagedClient;
 using System;
-using System.Diagnostics;
-using System.Security.Policy;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace Nona.Services
 {
-    public class MqttClientService : IMqttClientService, IDisposable
+    /// <summary>
+    /// IManagedMqttClient를 사용하여 안정적인 MQTT 연결을 관리하는 서비스 구현체입니다.
+    /// 자동 재연결, 메시지 큐잉 등 강력한 기능을 제공하여 전송 실패를 최소화합니다.
+    /// </summary>
+    public class MqttClientService : IMqttClientService
     {
-        private readonly IMqttClient _mqttClient;
-        public bool IsConnected => _mqttClient.IsConnected;
+        private IManagedMqttClient? _managedMqttClient;
+        private bool _isConnected;
 
-        public Action<MqttApplicationMessageReceivedEventArgs>? MessageReceivedHandler { get; set; }
+        public bool IsConnected
+        {
+            get => _isConnected;
+            private set
+            {
+                if (_isConnected != value)
+                {
+                    _isConnected = value;
+                }
+            }
+        }
+
+        public event Action<string, string>? LogMessageGenerated;
 
         public MqttClientService()
         {
+            // ManagedMqttClient는 MQTTnet 라이브러리에서 제공하는 고수준 클라이언트입니다.
             var factory = new MqttFactory();
-            _mqttClient = factory.CreateMqttClient();
+            _managedMqttClient = factory.CreateManagedMqttClient();
 
-            _mqttClient.ConnectedAsync += e =>
-            {
-                Debug.WriteLine("### MQTT: CONNECTED WITH SERVER ###");
-                return Task.CompletedTask;
-            };
-
-            _mqttClient.DisconnectedAsync += e =>
-            {
-                string logMessage = $"### MQTT: DISCONNECTED FROM SERVER. Reason: {e.ReasonString}, WasClean: {e.ClientWasConnected} ###";
-                Debug.WriteLine(logMessage);
-                return Task.CompletedTask;
-            };
-
-            _mqttClient.ApplicationMessageReceivedAsync += e =>
-            {
-                MessageReceivedHandler?.Invoke(e);
-                return Task.CompletedTask;
-            };
+            // 연결 상태 변경 이벤트 핸들러 등록
+            _managedMqttClient.ConnectedAsync += OnConnectedAsync;
+            _managedMqttClient.DisconnectedAsync += OnDisconnectedAsync;
+            _managedMqttClient.ApplicationMessageProcessedAsync += OnApplicationMessageProcessedAsync;
         }
 
-        // [수정] ConnectAsync 메서드에 username, password 파라미터 추가
-        public async Task<bool> ConnectAsync(string address, int port, string lwtTopic, string username, string password)
+        public async Task StartAsync(string address, int port, string username, string password, string lwtTopic)
         {
+            if (_managedMqttClient == null) return;
+
             var lwtPayload = "{\"state\": \"offline\"}";
 
-            var optionsBuilder = new MqttClientOptionsBuilder()
+            var clientOptionsBuilder = new MqttClientOptionsBuilder()
                 .WithTcpServer(address, port)
-                .WithClientId($"site-{Guid.NewGuid()}")
+                .WithClientId($"Nona-Client-{Guid.NewGuid()}")
                 .WithCleanSession()
                 .WithWillTopic(lwtTopic)
                 .WithWillPayload(lwtPayload)
                 .WithWillRetain(true)
                 .WithWillQualityOfServiceLevel(MQTTnet.Protocol.MqttQualityOfServiceLevel.AtLeastOnce);
 
-            // 사용자 이름이 설정된 경우에만 인증 정보 추가
             if (!string.IsNullOrEmpty(username))
             {
-                optionsBuilder.WithCredentials(username, password);
+                clientOptionsBuilder.WithCredentials(username, password);
             }
 
-            var options = optionsBuilder.Build();
+            var managedOptions = new ManagedMqttClientOptionsBuilder()
+                .WithClientOptions(clientOptionsBuilder.Build())
+                .WithAutoReconnectDelay(TimeSpan.FromSeconds(5)) // 5초마다 재연결 시도
+                .Build();
 
-            try
-            {
-                var result = await _mqttClient.ConnectAsync(options, CancellationToken.None);
-                return result.ResultCode == MqttClientConnectResultCode.Success;
-            }
-            catch (Exception)
-            {
-                return false;
-            }
+            // Managed Client 시작. 이제부터 백그라운드에서 연결을 관리합니다.
+            await _managedMqttClient.StartAsync(managedOptions);
+            RaiseLog("Info", $"MQTT 서비스 시작. 브로커 연결 시도 중... ({address}:{port})");
         }
 
-        public async Task DisconnectAsync()
+        public async Task StopAsync()
         {
-            if (_mqttClient.IsConnected)
+            if (_managedMqttClient != null && _managedMqttClient.IsStarted)
             {
-                var options = new MqttClientDisconnectOptions
-                {
-                    Reason = MqttClientDisconnectOptionsReason.NormalDisconnection,
-                    ReasonString = "User requested disconnect."
-                };
-                await _mqttClient.DisconnectAsync(options, CancellationToken.None);
+                await _managedMqttClient.StopAsync();
+                RaiseLog("Info", "MQTT 서비스가 정상적으로 중지되었습니다.");
             }
         }
 
         public async Task PublishAsync(string topic, string payload, bool retain = false)
         {
-            if (!_mqttClient.IsConnected)
+            if (_managedMqttClient == null || !_managedMqttClient.IsStarted)
             {
-                // [수정] 예외를 던져서 호출자가 문제를 인지하게 함
-                throw new InvalidOperationException("The MQTT client is disconnected.");
+                RaiseLog("Warning", "MQTT 서비스가 시작되지 않아 메시지를 발행할 수 없습니다.");
+                return;
             }
 
             var message = new MqttApplicationMessageBuilder()
@@ -101,35 +97,47 @@ namespace Nona.Services
                 .WithRetainFlag(retain)
                 .Build();
 
-            await _mqttClient.PublishAsync(message, CancellationToken.None);
+            // 메시지를 내부 큐에 추가합니다. Managed Client가 알아서 전송을 처리합니다.
+            // 연결이 끊겨도 큐에 저장되었다가 재연결 시 전송됩니다.
+            await _managedMqttClient.EnqueueAsync(message);
         }
 
-        public async Task SubscribeAsync(string topic)
+        private Task OnConnectedAsync(MqttClientConnectedEventArgs arg)
         {
-            if (!_mqttClient.IsConnected)
-            {
-                // [수정] 예외를 던져서 호출자가 문제를 인지하게 함
-                throw new InvalidOperationException("The MQTT client is disconnected.");
-            }
+            IsConnected = true;
+            RaiseLog("Success", "MQTT 브로커에 성공적으로 연결되었습니다.");
+            // LWT와 반대되는 온라인 상태 메시지 발행
+            _ = PublishAsync("status/factory-01/assembly/line-a/transmitter-01/connection", "{\"state\": \"online\"}", true);
+            return Task.CompletedTask;
+        }
 
-            await _mqttClient.SubscribeAsync(new MqttTopicFilterBuilder().WithTopic(topic).Build());
-            Debug.WriteLine($"### MQTT: SUBSCRIBED TO TOPIC: {topic} ###");
+        private Task OnDisconnectedAsync(MqttClientDisconnectedEventArgs arg)
+        {
+            IsConnected = false;
+            RaiseLog("Warning", $"MQTT 브로커 연결 끊어짐. 5초 후 재연결을 시도합니다. 사유: {arg.Reason}");
+            return Task.CompletedTask;
+        }
+
+        // 메시지가 성공적으로 처리(발행)되었을 때 호출되는 이벤트
+        private Task OnApplicationMessageProcessedAsync(ApplicationMessageProcessedEventArgs arg)
+        {
+            if (arg.Exception != null)
+            {
+                RaiseLog("Error", $"메시지 발행 실패: {arg.ApplicationMessage.ApplicationMessage.Topic}. 오류: {arg.Exception.Message}");
+            }
+            // 성공 로그는 너무 많을 수 있으므로 오류 발생 시에만 기록
+            return Task.CompletedTask;
+        }
+
+        private void RaiseLog(string level, string message)
+        {
+            LogMessageGenerated?.Invoke(level, message);
         }
 
         public void Dispose()
         {
-            if (_mqttClient.IsConnected)
-            {
-                try
-                {
-                    _mqttClient.DisconnectAsync().GetAwaiter().GetResult();
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"Error during dispose/disconnect: {ex.Message}");
-                }
-            }
-            _mqttClient?.Dispose();
+            StopAsync().GetAwaiter().GetResult();
+            _managedMqttClient?.Dispose();
         }
     }
 }
